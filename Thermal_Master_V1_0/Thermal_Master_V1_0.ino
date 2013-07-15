@@ -8,6 +8,12 @@
 
 #include <stdlib.h>
 #include <Wire.h>
+#include <SPI.h>
+#include <Ethernet.h>
+#include <LiquidCrystal.h>
+#include <RealTimeClockDS1307.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 #define DEBUGGING false
 
@@ -18,13 +24,17 @@
 
 
 // Definitions for the temperautres
-#define ROOM_TEMP_VHIGH  28.0    // temperature at which the HRAC comes on
-#define ROOM_TEMP_HIGH   23.0    // temperature at which all fans come on
-#define ROOM_TARGET_TEMP 21.0    // The ideal target temperature for the room
+#define ROOM_TEMP_MAX    30.0    // HRAC
+#define ROOM_TEMP_XHIGH  28.0    // Two fans on fast
+#define ROOM_TEMP_VHIGH  26.0    // Two fans, one fast, one slow
+#define ROOM_TEMP_HIGH   24.0    // One fan on fast
+#define ROOM_TARGET_TEMP 21.0    // The ideal target temperature for the room, above this one fan on slow
 #define ROOM_TEMP_LOW    19.0    // temperature at which the all fans go off
 #define ROOM_TEMP_VLOW   16.0    // temperature at which the HRAC come on
 
-// Definitions for the fans
+// Definitions for the fan relay control board
+#define FAN_RELAY_CONTROL 0x20  // This is the I2C address
+
 #define RUNNING          B0011010;  // The default state is for the fans to be running
 #define STOPPED          B0011010;
 #define FAST             B0000101;  // The default state os for the fans to be in fast mode
@@ -43,16 +53,16 @@ byte fan_mode = B00000000;
 ** Define the I/O pins and what they control
 */
 // Analog pins
-#define BUTTONS       A0       // Pin for 
-#define UNUSED        A1       // Pin for 
-#define UNUSED        A2       // Pin for 
-#define UNUSED        A3       // Pin for 
+#define BUTTONS          A0       // Pin for 
+#define UNUSED           A1       // Pin for 
+#define UNUSED           A2       // Pin for 
+#define UNUSED           A3       // Pin for 
 
 // Digital pins
-#define UNUSED         0       // Pin for
-#define UNUSED         1       // Pin for
-#define LCDBACKLIGHT   3       // Pin for the LCD backlight switch
+#define UNUSED           0       // Pin for
 #define ONEWIRE_RACK_A   2
+#define UNUSED           1       // Pin for
+#define LCDBACKLIGHT     3       // Pin for the LCD backlight switch
 #define ONEWIRE_RACK_B   99
 #define ONEWIRE_RACK_C   99
 #define ONEWIRE_ROOM     99
@@ -65,10 +75,10 @@ boolean L_Button = false;      // Left button pressed
 boolean R_Button = false;      // Right button pressed
 boolean S_Button = false;      // Select button pressed
 
-boolean HRAC_Call = false;     // Call for HRAC only mode
+boolean HRAC_Call =    false;  // Call for HRAC only mode
 boolean Full_Exhaust = false;  // Call for all fans on to exhaust room
-boolean Printer = true;        // Assume the 3D printer is running
-boolean All_Stop = false;      // Stop all ventilation
+boolean Printer =      true;   // Assume the 3D printer is running
+boolean All_Stop =     false;  // Stop all ventilation
 
 #define BUTTON_DRIFT    5      // Drift in the analog value of the buttons
 
@@ -129,13 +139,7 @@ byte error_no = NO_ERR;        // Used to hold the error code when an error is e
 byte old_minute = 0;           // To track the minutes going by for relative timings
 byte old_hour = 0;             // To track the hours going by for relative timings
 
-// Pachube data
-#define PACHUBE_FEED "43570"
-#define PACHUBE_KEY  "y_eXWNhsWfsaedd6VhbA13e9qVYCa1_ck5VniQ-3uUw"
-/* byte pachube[] = { 173, 203, 98, 29 }; */
-byte pachube[] = { 64,  94,  18, 121 };
-//byte pachube[] = { 216, 52, 233, 122 };   // Seems to have been replaced.
-char pachube_data[10];
+
 // char array for constructing the COSM data strings so we can report it
 char COSM_rack_a_temp[24];
 char temp_str[20];
@@ -149,8 +153,6 @@ char temp_str[20];
 ** Ethernet shield attached to pins 10, 11, 12, 13
 */
 
-#include <SPI.h>
-#include <Ethernet.h>
 
 // Ethernet parameters for the main network
 byte my_mac[]     = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x24 };   // Our MAC address
@@ -179,7 +181,6 @@ EthernetClient client;                                 // We are a client meanin
 ** ends to +5V and ground, wiper to LCD VO pin (pin 3)
 */
 
-#include <LiquidCrystal.h>
 
 // initialize the library with the numbers of the interface pins
 LiquidCrystal lcd_main(8, 9, 4, 5, 6, 7);
@@ -194,8 +195,6 @@ LiquidCrystal lcd_main(8, 9, 4, 5, 6, 7);
 ** Here are the routines needed for handling the real time clock.
 ** The 2IC bus for this is on Analogue pins 4 & 5
 */
-#include <Wire.h>
-#include <RealTimeClockDS1307.h>
 
 #define DS1307_I2C_ADDRESS 0x68  // This is the I2C address
 byte second, minute, hour, dayOfWeek, dayOfMonth, month, year;
@@ -211,8 +210,6 @@ byte second, minute, hour, dayOfWeek, dayOfMonth, month, year;
 ** 
 **
 */
-#include <OneWire.h>
-#include <DallasTemperature.h>
 
 // Data wire is plugged into port 2 on the Arduino
 #define TEMPERATURE_PRECISION 10    // Number of bit of precission to use in conversion
@@ -238,8 +235,6 @@ DeviceAddress tempDeviceAddress;      // We'll use this variable to store a foun
 byte sensor_errors = 0;               // Counter to track the number fo sensor errors in each pass
 
 
-
-
 /******************************************************************
 *******************************************************************
 ** Now set up all the bits and pieces
@@ -249,11 +244,12 @@ void setup()
 {
   
   delay(200);  // Ensure the Ethernet chip has reset fully
-  
-  // start serial port if required for debugging
+
+
 #ifdef DEBUGGING
-  Serial.begin(9600);
+  Serial.begin(9600);    // start serial port if required for debugging
 #endif
+
   
   // set up the LCD
   pinMode(LCDBACKLIGHT, OUTPUT);           // LCD backlight
@@ -267,37 +263,37 @@ void setup()
   
 
  // start the Ethernet connection and the server:
-  lcd_main.setCursor(0,2);
+  lcd_main.setCursor(0,1);
   lcd_main.print(" -  Network  - ");
   Ethernet.begin(my_mac, my_ip, net_dns, net_router);  
   
   
   // Start up the 2IC bus to talk to the Real Time Clock
-  lcd_main.setCursor(0,2);
+  lcd_main.setCursor(0,1);
   lcd_main.print(" -  2IC  Bus  - ");
   
   Wire.begin();
   
   // Set the addressing style
-  Wire.beginTransmission(0x20);
+  Wire.beginTransmission(FAN_RELAY_CONTROL);
   Wire.write(0x12);
   Wire.write(0x20);
   Wire.endTransmission();
   
   // Set the I/O bank A to be outputs
-  Wire.beginTransmission(0x20);
+  Wire.beginTransmission(FAN_RELAY_CONTROL);
   Wire.write(0x00);
   Wire.write(0x00);
   Wire.endTransmission();  
   
   // Set the fans tp full extract
-  Wire.beginTransmission(0x20);
+  Wire.beginTransmission(FAN_RELAY_CONTROL);
   Wire.write(0x12);
   Wire.write(B00000000);
   Wire.endTransmission();  
   
   // Startup the 1-Wire devices
-  lcd_main.setCursor(0,2);
+  lcd_main.setCursor(0,1);
   lcd_main.print(" - 1Wire Bus  - ");
 
   sensors.begin();
@@ -339,12 +335,10 @@ void setup()
   pinMode (BUTTONS, INPUT);
 
 
-  lcd_main.setCursor(0,2);
-  lcd_main.print(" -    Done    - ");
+  lcd_main.setCursor(0,1);
+  lcd_main.print(" -   Running  - ");
 
   delay(100);    // Wait for the Ethernet controller to fully initialise
-
-  lcd_main.clear();
 
 }
 
@@ -374,18 +368,20 @@ void loop()
   sensors.getAddress(tempDeviceAddress, 1);
   rack_a_upper_temp = sensors.getTempC(tempDeviceAddress);   // Get the rack temparture
   
+  
   if (rack_a_upper_temp < 0)
      { sensor_errors++; } // Check that we could read it
   else
   {
     // Figure out what to do with the fans
-    fan_mode = B00001010;                               //All stop
-    if (rack_a_upper_temp > 23) fan_mode = B00001001;
-    if (rack_a_upper_temp > 25) fan_mode = B00001000;
-    if (rack_a_upper_temp > 30) fan_mode = B00000100;
-    if (rack_a_upper_temp > 35) fan_mode = B00000000;
+    fan_mode = B00001010;                                           // All stop
+    if (rack_a_upper_temp > ROOM_TARGET_TEMP) fan_mode = B00001001; // Internal=slow; External=off
+    if (rack_a_upper_temp > ROOM_TEMP_HIGH)   fan_mode = B00001000; // Internal=fast; External=off
+                                                                    // Internal=slow; External=slow
+    if (rack_a_upper_temp > ROOM_TEMP_VHIGH)  fan_mode = B00000100; // Internal=fast; External=slow
+    if (rack_a_upper_temp > ROOM_TEMP_XHIGH)  fan_mode = B00000000; // Internal=fast; External=fast
     // Set the fans
-    Wire.beginTransmission(0x20);
+    Wire.beginTransmission(FAN_RELAY_CONTROL);
     Wire.write(0x12);
     Wire.write(fan_mode);
     Wire.endTransmission();
@@ -427,14 +423,13 @@ void loop()
     client.stop();
   }    
   
-
+   lcd_main.setCursor(0,2);
    lcd_main.print("Temp = ");
    if (rack_a_upper_temp > 0) {
-      lcd_main.println(rack_a_upper_temp);
+      lcd_main.print(rack_a_upper_temp);
    } else {
-      lcd_main.println("Error");
+      lcd_main.print("Error");
    }
-   lcd_main.println(COSM_rack_a_temp);
 
    delay(60000);
 
