@@ -29,8 +29,8 @@
 
 
 // Definitions for the temperautres
-#define ROOM_TEMP_MAX    30.0    // HRAC
-#define ROOM_TEMP_XHIGH  28.0    // Two fans on fast
+#define ROOM_TEMP_MAX    28.0    // HRAC
+#define ROOM_TEMP_XHIGH  27.0    // Two fans on fast
 #define ROOM_TEMP_VHIGH  26.0    // Two fans, one fast, one slow
 #define ROOM_TEMP_HIGH   24.0    // One fan on fast
 #define ROOM_TARGET_TEMP 22.0    // The ideal target temperature for the room, above this one fan on slow
@@ -360,13 +360,21 @@ void loop()
 {
     
 /*
-** Gather Temperatures
+** Gather temperatures, humidity and other environmental information
 **
 */
 
+// Outside temperature and humidity
+
+// Room temperature and humidity
+
+// House temperature and humidity
+
+// Rack Temperatures
+
 // Read 1-wire temperatures
 
-  sensors.requestTemperatures();                     // Send the command to get temperatures to all devices on the bus
+  sensors.requestTemperatures();                             // Send the command to get temperatures to all devices on the bus
   
   sensors.getAddress(tempDeviceAddress, 1);
   rack_a_upper_temp = sensors.getTempC(tempDeviceAddress);   // Get the rack temparture
@@ -376,13 +384,27 @@ void loop()
      { sensor_errors++; } // Check that we could read it
   else
   {
-    // Figure out what to do with the fans
-    fan_mode = B00001010;                                           // All stop
-    if (rack_a_upper_temp > ROOM_TARGET_TEMP) fan_mode = B00001001; // Internal=slow; External=off
-    if (rack_a_upper_temp > ROOM_TEMP_HIGH)   fan_mode = B00001000; // Internal=fast; External=off
-                                                                    // Internal=slow; External=slow
-    if (rack_a_upper_temp > ROOM_TEMP_VHIGH)  fan_mode = B00000100; // Internal=fast; External=slow
-    if (rack_a_upper_temp > ROOM_TEMP_XHIGH)  fan_mode = B00000000; // Internal=fast; External=fast
+    if (HRAC_Call) {
+      fan_mode = B10011010;
+      if (rack_a_upper_temp < ROOM_TEMP_HIGH) {
+        fan_mode = B00001001;
+        HRAC_Call = false;
+      }
+    }
+    else
+    {  
+      // Figure out what to do with the fans
+      fan_mode = B00011010;                                            // All stop
+      
+      if (rack_a_upper_temp > ROOM_TARGET_TEMP) fan_mode = B00001010;  // Draw = On; Internal = Off; External = Off
+    
+      if (rack_a_upper_temp > ROOM_TEMP_HIGH)   fan_mode = B00001001;  // Draw = On; Internal=slow; External=off
+      
+      if (rack_a_upper_temp > ROOM_TEMP_VHIGH)  fan_mode = B00001000;  // Draw = On; Internal=fast; External=off
+                                                                     
+      if (rack_a_upper_temp > ROOM_TEMP_XHIGH)  HRAC_Call = true;  // Draw = On; Internal=fast; External=fast
+    }  
+    
     // Set the fans
     Wire.beginTransmission(FAN_RELAY_CONTROL);
     Wire.write(0x12);
@@ -395,6 +417,50 @@ void loop()
 
   }
   
+// HRAC Status
+
+// UPS status and mode
+
+
+
+/*
+** Calculate decission variables
+*/
+
+// Average instantaneous & temproal temperature for Rack A
+
+// Average instantaneous & temporal temperature for Rack B
+
+// Avergae instantaneous & temporal temperature for rack C
+
+// Temporal average outside temperature
+
+// Temporal average inside temperature
+
+// Temporal average house temperature
+
+// Cumulative battery run time for UPS
+
+
+/*
+** Based upon decission variables figure out what mode we should be in
+*/
+
+/*
+** Update the device status
+*/
+
+/* 
+** Update the announciator display & LCD
+*/
+   lcd_main.setCursor(0,2);
+   lcd_main.print("Temp = ");
+   if (rack_a_upper_temp > 0) {
+      lcd_main.print(rack_a_upper_temp);
+   } else {
+      lcd_main.print("Error");
+   }
+   
 /*
 ** Send the data to COSM
 */
@@ -426,14 +492,10 @@ void loop()
     client.stop();
   }    
   
-   lcd_main.setCursor(0,2);
-   lcd_main.print("Temp = ");
-   if (rack_a_upper_temp > 0) {
-      lcd_main.print(rack_a_upper_temp);
-   } else {
-      lcd_main.print("Error");
-   }
 
+/*
+** Wait for a bit and do it all again
+*/
    delay(60000);
 
 } 
